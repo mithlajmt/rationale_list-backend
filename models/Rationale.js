@@ -7,7 +7,7 @@ const RationaleSchema = new mongoose.Schema({
   RationaleSummary: { type: String, required: true },
   RationaleText: { type: String, required: true },
   Enable: { type: Boolean, default: true },
-  GroupID: { type: Number, enum: [0, 1, 2, 3, 4, 5], required: true },
+  GroupID: { type: Number, enum: [0, 1, 2, 3, 4, 5] },
   Sequence: { type: Number },
 });
 

@@ -3,7 +3,7 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 
 // Set a secret key for JWT (ensure this is stored securely in your environment variables)
-const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret'; // Replace with your secret key
+const JWT_SECRET = process.env.JWT_SECRET || 'onedayislongyears';
 
 // Register User
 const registerUser = async (req, res) => {
@@ -12,7 +12,7 @@ const registerUser = async (req, res) => {
         const { userName, email, password, user_type } = req.body;
         const role = user_type
         const existingUser = await UserM.findOne({
-            $or: [{ userName }, { email }]
+            $or: [{ userName }, { email }]  
         });
 
         if (existingUser) {
@@ -33,7 +33,7 @@ const registerUser = async (req, res) => {
         const token = jwt.sign(
             { id: newUser._id, userName: newUser.userName, email: newUser.email,role: newUser.role},
             JWT_SECRET,
-            { expiresIn: '1h' } // Token expires in 1 hour
+            { expiresIn: '1h' } 
         );
 
         return res.status(201).json({

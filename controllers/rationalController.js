@@ -9,24 +9,60 @@ const modifier = require('./../models/modifier');
 
 
 const getCompleteRationale = async function (req, res) {
-    const page = parseInt(req.query.page) || 1;      
-    const limit = parseInt(req.query.limit) || 8;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.pageSize) || 8;
+    const groupID = parseInt(req.query.GroupID);
+    const specialtyCode = req.query.SpecialtyCode;
 
     try {
-        const completeRationale = await Rationale.aggregate([
-            {
-                $sort: { Sequence: 1 } // Sort by sequence in ascending order; use -1 for descending
-            },
-            { 
-                $skip: (page - 1) * limit 
-            },
-            { 
-                $limit: limit 
-            }
-        ]);
+        // Define initial match conditions
+        const matchConditions = {};
 
-        // Count total documents for calculating total pages
-        const totalDocuments = await Rationale.countDocuments();
+        if (groupID) {
+            matchConditions.GroupID = groupID;
+        }
+
+        // Define the pipeline with a facet to get both count and paginated results
+        const pipeline = [
+            { 
+                $match: matchConditions 
+            },
+            {
+                $lookup: {
+                    from: "specialties",
+                    localField: "RationaleID",
+                    foreignField: "RationaleID",
+                    as: "specialties"
+                }
+            },
+            // { 
+            //     $unwind: "$specialties" 
+            // },
+            {
+                $match: specialtyCode ? { "specialties.SpecialtyCode": specialtyCode } : {}
+            },
+            { 
+                $sort: { Sequence: 1 } 
+            },
+            {
+                $facet: {
+                    totalData: [
+                        { $skip: (page - 1) * limit },
+                        { $limit: limit }
+                    ],
+                    totalCount: [
+                        { $count: "totalDocuments" }
+                    ]
+                }
+            }
+        ];
+
+        const result = await Rationale.aggregate(pipeline);
+        // console.log("Result:", result[0].totalCount);
+
+        // Extract the results and count from the facet output
+        const completeRationale = result[0].totalData;
+        const totalDocuments = result[0].totalCount.length > 0 ? result[0].totalCount[0].totalDocuments : 0;
         const totalPages = Math.ceil(totalDocuments / limit);
 
         if (completeRationale.length > 0) {
@@ -42,7 +78,7 @@ const getCompleteRationale = async function (req, res) {
                 }
             });
         } else {
-            res.status(404).json({
+            res.status(204).json({
                 success: false,
                 message: "No Rationale data found.",
                 data: [],
@@ -54,10 +90,9 @@ const getCompleteRationale = async function (req, res) {
                 }
             });
         }
-    }  catch (error) {
+    } catch (error) {
         console.error("Error in getCompleteRationale:", error);
 
-        // Respond with error details
         res.status(500).json({
             success: false,
             message: "An error occurred while retrieving rationale data.",
@@ -65,6 +100,9 @@ const getCompleteRationale = async function (req, res) {
         });
     }
 };
+
+
+
 
 
 const getRationaleData = async (req, res) => {
@@ -108,6 +146,7 @@ const getRationaleData = async (req, res) => {
             }
         ]);
 
+
         // If rationale data is not found
         if (rationale.length === 0) {
             return res.status(404).json({
@@ -147,7 +186,7 @@ const getRationaleData = async (req, res) => {
 
 
 const updateRationale = async (req, res) => {
-    const { rationaleSummary, rationaleText, Enable, Module, Decision, specialties, modifiers, procedures } = req.body;
+    const { rationaleSummary, rationaleText, Enable, Module, Decision, specialties, modifiers, procedures,GroupID } = req.body;
 
     // Check for missing required fields
     if (!rationaleSummary || !rationaleText || Enable === undefined || !Module || !Decision || !specialties) {
@@ -209,6 +248,7 @@ const updateRationale = async (req, res) => {
                     RationalText: rationaleText,
                     Enable,
                     Module,
+                    GroupID
                 },
             }
         );
@@ -334,10 +374,134 @@ const getSpecialityList = async (req, res) => {
     }
 };
 
+
+const addRationale = async (req, res) => {
+    const { rationaleSummary, rationaleText, Enable, Module, Decision, specialties, modifiers, procedures,GroupID } = req.body;
+
+    // Check for missing required fields
+    if (!rationaleSummary || !rationaleText || Enable === undefined || !Module || !Decision || !specialties) {
+        return res.status(400).json({
+            success: false,
+            message: "Missing required fields.",
+        });
+    }
+
+    try {
+        // Retrieve all DecisionText values from DecisionList and convert to array
+        const decisions = await DecisionList.find({});
+        const decisionTexts = decisions.map(d => d.DecisionText);
+
+        // Check if the provided decision matches any DecisionText
+        if (!decisionTexts.includes(Decision)) {
+            return res.status(400).json({
+                success: false,
+                message: "Provided decision does not match any valid decision text.",
+            });
+        }
+
+        // Retrieve SpecialtyCodes from SpecialtiesList for validation
+        const specialtiesList = await SpecialtiesList.find({});
+        const validSpecialtyCodes = specialtiesList.map(s => s.SpecialtyCode);
+
+        // Validate each specialty code in specialties
+        const invalidSpecialties = specialties.filter(s => !validSpecialtyCodes.includes(s.SpecialtyCode));
+        if (invalidSpecialties.length > 0) {
+            return res.status(400).json({
+                success: false,
+                message: "One or more SpecialtyCodes are invalid.",
+                invalidSpecialties,
+            });
+        }
+
+        // Generate a unique RationaleID
+        const maxRationale = await Rationale.findOne().sort({ RationaleID: -1 }).limit(1);
+        const newRationaleID = maxRationale ? maxRationale.RationaleID + 1 : 1;
+        console.log(newRationaleID);
+
+        // Create new rationale
+        const newRationale = new Rationale({
+            RationaleID: newRationaleID,
+            RationaleSummary: rationaleSummary,
+            RationaleText: rationaleText,
+            Enable,
+            Module,
+            GroupID
+        });
+        await newRationale.save();
+
+        // Create RationaleDecision entry
+        await RationaleDecision.create({
+            RationaleID: newRationaleID,
+            DecisionText:Decision,
+        });
+
+        // Add specialties
+        for (const specialty of specialties) {
+            const { Enable, SpecialtyCode } = specialty;
+            await rSpecialities.create({
+                RationaleID: newRationaleID,
+                SpecialtyCode,
+                Enable,
+            });
+        }
+
+        // Add modifiers if provided
+        if (modifiers) {
+            await modifier.create({
+                RationaleID: newRationaleID,
+                ModifierList: modifiers,
+            });
+        }
+
+        // Add procedures if provided
+        if (procedures && Array.isArray(procedures)) {
+            for (const procedure of procedures) {
+                const { from: serviceCodeFrom, to: serviceCodeTo, serviceCode: serviceCodeList } = procedure;
+
+                await Procedure.create({
+                    rationaleID: newRationaleID,
+                    serviceCodeFrom,
+                    serviceCodeTo,
+                    serviceCodeList,
+                });
+            }
+        }
+
+        // Successful creation response
+        res.status(201).json({
+            success: true,
+            message: "Rationale created successfully.",
+            data: {
+                RationaleID: newRationaleID,
+                rationaleSummary,
+                rationaleText,
+                Enable,
+                Module,
+                Decision,
+                specialties,
+                modifiers,
+                procedures,
+            },
+        });
+
+    } catch (error) {
+        console.error("Error in addRationale:", error);
+
+        // Respond with error details
+        res.status(500).json({
+            success: false,
+            message: "An error occurred while creating rationale.",
+            error: error.message || "Unknown error",
+        });
+    }
+};
+
+
 module.exports = {
     getCompleteRationale,
     updateRationale,
     getRationaleData,
     getDecisionList,
-    getSpecialityList
+    getSpecialityList,
+    addRationale,
 };
